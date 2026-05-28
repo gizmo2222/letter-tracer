@@ -153,6 +153,11 @@
       opacity: 0.3;
       cursor: default;
     }
+    #mode-btn {
+      border-color: #40c4ff;
+      color: #40c4ff;
+      flex-shrink: 0;
+    }
 
     #progress-wrap {
       flex: 1;
@@ -314,6 +319,7 @@
     <button class="btn size-btn" onclick="adjustSize(-1)">−</button>
     <button class="btn size-btn" onclick="adjustSize(+1)">+</button>
   </div>
+  <button class="btn" id="mode-btn" onclick="toggleMode()">Lines</button>
   <div id="progress-wrap">
     <div id="progress-bg">
       <div id="progress-bar"></div>
@@ -409,16 +415,24 @@ const PATHS_LC = {
 // ─── State ───────────────────────────────────────────────
 let letterIndex   = 0;
 let isUppercase   = true;
+let isLineMode    = true;   // true = single-stroke paths, false = block letters
 let totalStars    = 0;
 let celebrated    = false;
 const SIZE_STEPS  = [0.30, 0.38, 0.46, 0.54, 0.62, 0.70, 0.78];
-let sizeStepIndex = 4; // default = 0.62
+let sizeStepIndex = 4;
 let isDrawing     = false;
 let lastX = 0, lastY = 0;
 
-// Waypoint coverage
-let waypoints        = [];   // [[physX, physY], …] sampled along letter path
+// Line-mode coverage (waypoint proximity)
+let waypoints        = [];
 let visitedWaypoints = new Set();
+
+// Block-mode coverage (pixel buckets)
+const GRID_SIZE    = 38;
+let pixelData      = null;
+let letterBuckets  = new Set();
+let coveredBuckets = new Set();
+let mapWidth = 0, mapHeight = 0;
 
 // ─── Canvas setup ────────────────────────────────────────
 const guideCanvas = document.getElementById('guide-canvas');
@@ -478,18 +492,23 @@ function letterTransform() {
 
 // ─── Render guide ─────────────────────────────────────────
 function renderLetter() {
+  if (isLineMode) renderLetterLine();
+  else            renderLetterBlock();
+  document.getElementById('letter-display').textContent = getLetter();
+  resetDrawing();
+}
+
+function renderLetterLine() {
   const W = guideCanvas.width, H = guideCanvas.height;
   const { ox, oy, scale } = letterTransform();
-  const lw = Math.max(4 * dpr, scale * 0.055); // line width in physical px
+  const lw = Math.max(4 * dpr, scale * 0.055);
 
   guideCtx.clearRect(0, 0, W, H);
 
-  // Build a transformed Path2D using DOMMatrix (no context transform needed)
   const matrix = new DOMMatrix([scale, 0, 0, scale, ox, oy]);
   const p2d = new Path2D();
   p2d.addPath(new Path2D(getPathStr()), matrix);
 
-  // Dashed gold guide line
   guideCtx.strokeStyle = 'rgba(255,214,0,0.85)';
   guideCtx.lineWidth   = lw;
   guideCtx.lineCap     = 'round';
@@ -498,16 +517,77 @@ function renderLetter() {
   guideCtx.stroke(p2d);
   guideCtx.setLineDash([]);
 
-  document.getElementById('letter-display').textContent = getLetter();
-
   buildWaypoints();
-  resetDrawing();
-
-  // Pulse dot at the first point of the path
   if (waypoints.length > 0) {
     const [wpx, wpy] = waypoints[0];
     placeStartHintAt(wpx / dpr, wpy / dpr);
   }
+}
+
+function renderLetterBlock() {
+  const W = guideCanvas.width, H = guideCanvas.height;
+  const fontSize = Math.min(W, H) * SIZE_STEPS[sizeStepIndex];
+  const fontStr  = `bold ${fontSize}px 'Arial Black','Helvetica Neue',Arial,sans-serif`;
+
+  guideCtx.font         = fontStr;
+  guideCtx.textBaseline = 'alphabetic';
+  const m    = guideCtx.measureText(getLetter());
+  const tx   = (W - m.width) / 2;
+  const ty   = (H - (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent)) / 2
+               + m.actualBoundingBoxAscent;
+
+  guideCtx.clearRect(0, 0, W, H);
+
+  guideCtx.save();
+  guideCtx.globalAlpha  = 0.09;
+  guideCtx.fillStyle    = '#ffffff';
+  guideCtx.font         = fontStr;
+  guideCtx.textBaseline = 'alphabetic';
+  guideCtx.fillText(getLetter(), tx, ty);
+  guideCtx.restore();
+
+  guideCtx.save();
+  guideCtx.font         = fontStr;
+  guideCtx.textBaseline = 'alphabetic';
+  guideCtx.strokeStyle  = 'rgba(255,214,0,0.7)';
+  guideCtx.lineWidth    = Math.max(3, fontSize * 0.022);
+  guideCtx.lineCap      = 'round';
+  guideCtx.lineJoin     = 'round';
+  guideCtx.setLineDash([fontSize * 0.028, fontSize * 0.052]);
+  guideCtx.strokeText(getLetter(), tx, ty);
+  guideCtx.restore();
+
+  buildPixelMap(fontStr, tx, ty, W, H);
+  placeStartHintAt(
+    (tx + m.width * 0.08) / dpr,
+    (ty - m.actualBoundingBoxAscent) / dpr
+  );
+}
+
+// ─── Block-mode pixel map ─────────────────────────────────
+function buildPixelMap(fontStr, tx, ty, W, H) {
+  const off = document.createElement('canvas');
+  off.width = W; off.height = H;
+  const ctx = off.getContext('2d', { willReadFrequently: true });
+  ctx.font = fontStr; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(getLetter(), tx, ty);
+
+  pixelData = ctx.getImageData(0, 0, W, H);
+  mapWidth = W; mapHeight = H;
+  letterBuckets.clear();
+
+  const step = Math.max(1, Math.round(dpr * 1.5));
+  for (let py = 0; py < H; py += step)
+    for (let px = 0; px < W; px += step)
+      if (pixelData.data[(py * W + px) * 4 + 3] > 60)
+        letterBuckets.add(toBucket(px, py));
+}
+
+function toBucket(px, py) {
+  const bx = Math.min(GRID_SIZE - 1, Math.floor(px * GRID_SIZE / mapWidth));
+  const by = Math.min(GRID_SIZE - 1, Math.floor(py * GRID_SIZE / mapHeight));
+  return by * GRID_SIZE + bx;
 }
 
 // ─── Waypoint map ─────────────────────────────────────────
@@ -539,10 +619,13 @@ function buildWaypoints() {
 
 // ─── Coverage detection ───────────────────────────────────
 function markCoverage(cssX, cssY) {
+  return isLineMode ? markCoverageLine(cssX, cssY) : markCoverageBlock(cssX, cssY);
+}
+
+function markCoverageLine(cssX, cssY) {
   const px = cssX * dpr, py = cssY * dpr;
   const r2 = (DETECT_RADIUS * dpr) ** 2;
   let onPath = false;
-
   for (let i = 0; i < waypoints.length; i++) {
     const dx = px - waypoints[i][0], dy = py - waypoints[i][1];
     const d2 = dx * dx + dy * dy;
@@ -551,8 +634,35 @@ function markCoverage(cssX, cssY) {
   return onPath;
 }
 
+function markCoverageBlock(cssX, cssY) {
+  const px  = cssX * dpr, py  = cssY * dpr;
+  const r   = DETECT_RADIUS * dpr;
+  const bx  = Math.floor(px * GRID_SIZE / mapWidth);
+  const by  = Math.floor(py * GRID_SIZE / mapHeight);
+  const cW  = mapWidth  / GRID_SIZE, cH = mapHeight / GRID_SIZE;
+  const br  = Math.ceil(r / Math.min(cW, cH)) + 1;
+  for (let dy = -br; dy <= br; dy++)
+    for (let dx = -br; dx <= br; dx++) {
+      const tbx = bx + dx, tby = by + dy;
+      if (tbx < 0 || tby < 0 || tbx >= GRID_SIZE || tby >= GRID_SIZE) continue;
+      const b = tby * GRID_SIZE + tbx;
+      if (letterBuckets.has(b)) coveredBuckets.add(b);
+    }
+  // On-letter check: sample nearby pixels
+  const step = Math.max(2, Math.round(r / 7));
+  for (let dy = -r; dy <= r; dy += step)
+    for (let dx = -r; dx <= r; dx += step) {
+      if (dx * dx + dy * dy > r * r || !pixelData) continue;
+      const tx = Math.round(px + dx), ty = Math.round(py + dy);
+      if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) continue;
+      if (pixelData.data[(ty * mapWidth + tx) * 4 + 3] > 60) return true;
+    }
+  return false;
+}
+
 function getCoverage() {
-  return waypoints.length > 0 ? visitedWaypoints.size / waypoints.length : 0;
+  if (isLineMode) return waypoints.length > 0 ? visitedWaypoints.size / waypoints.length : 0;
+  return letterBuckets.size > 0 ? coveredBuckets.size / letterBuckets.size : 0;
 }
 
 // ─── Drawing ──────────────────────────────────────────────
@@ -681,8 +791,18 @@ function placeStartHintAt(cssX, cssY) {
 function resetDrawing() {
   drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
   visitedWaypoints = new Set();
+  coveredBuckets.clear();
   celebrated = false;
   document.getElementById('progress-bar').style.width = '0%';
+}
+
+function toggleMode() {
+  isLineMode = !isLineMode;
+  const btn = document.getElementById('mode-btn');
+  btn.textContent   = isLineMode ? 'Lines' : 'Blocks';
+  btn.style.color   = isLineMode ? '#40c4ff' : 'var(--green)';
+  btn.style.borderColor = btn.style.color;
+  renderLetter();
 }
 
 function clearDrawing() {
