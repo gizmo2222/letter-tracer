@@ -416,9 +416,13 @@ function renderLetter() {
   guideCtx.save();
   guideCtx.font         = fontStr;
   guideCtx.textBaseline = 'alphabetic';
-  guideCtx.strokeStyle  = 'rgba(255,214,0,0.55)';
-  guideCtx.lineWidth    = Math.max(3, fontSize * 0.018);
-  guideCtx.setLineDash([fontSize * 0.038, fontSize * 0.022]);
+  guideCtx.strokeStyle  = 'rgba(255,214,0,0.7)';
+  guideCtx.lineWidth    = Math.max(3, fontSize * 0.022);
+  guideCtx.lineCap      = 'round';
+  guideCtx.lineJoin     = 'round';
+  // gap > dash so blocks don't crowd at corners; round caps extend each dash
+  // by lineWidth/2 per end, so visual dash ≈ gap at this ratio
+  guideCtx.setLineDash([fontSize * 0.028, fontSize * 0.052]);
   guideCtx.strokeText(getLetter(), tx, ty);
   guideCtx.restore();
 
