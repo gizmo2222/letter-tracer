@@ -15,13 +15,14 @@
       --green:   #00e676;
       --orange:  #ff9100;
       --purple:  #bb86fc;
+      --text:    #ffffff;
     }
 
     html, body {
       height: 100%;
       overflow: hidden;
       background: var(--bg);
-      color: #fff;
+      color: var(--text);
       font-family: 'Arial Black', 'Helvetica Neue', Arial, sans-serif;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
@@ -170,7 +171,7 @@
       overflow: hidden;
     }
     #progress-bar {
-      background: linear-gradient(90deg, var(--green), #69ff47);
+      background: var(--green);
       height: 100%;
       width: 0%;
       border-radius: 8px;
@@ -290,6 +291,62 @@
       0%, 100% { transform: scale(1); opacity: 0.9; }
       50%       { transform: scale(1.5); opacity: 0.4; }
     }
+
+    /* ── Theme overlay ── */
+    #theme-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.88);
+      z-index: 50;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      padding: 24px;
+    }
+    #theme-overlay.open { display: flex; }
+    #theme-overlay h2 {
+      color: var(--gold);
+      font-size: 1.1rem;
+      letter-spacing: 3px;
+    }
+    #theme-options {
+      display: flex;
+      gap: 28px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .theme-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .theme-swatch {
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.12s;
+    }
+    .theme-swatch.selected {
+      border-width: 4px;
+      border-color: #ffffff;
+      box-shadow: 0 0 20px rgba(255,255,255,0.5);
+      transform: scale(1.12);
+    }
+    .theme-swatch:active { transform: scale(0.93); }
+    .theme-label {
+      font-size: 0.82rem;
+      font-weight: 900;
+      letter-spacing: 1px;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -298,6 +355,7 @@
 <div id="topbar">
   <div id="app-title">LETTER TRACER</div>
   <button class="btn" id="case-btn" onclick="toggleCase()">Aa</button>
+  <button class="btn" id="theme-btn" onclick="openThemes()" style="padding:7px 10px" title="Color theme">🎨</button>
   <div id="nav">
     <button class="arrow-btn" onclick="prevLetter()">◀</button>
     <div id="letter-display" onclick="openGrid()" title="Pick a letter">A</div>
@@ -338,6 +396,13 @@
 <!-- Celebration overlay -->
 <div id="celebration-overlay">
   <div id="celebration-msg">Amazing!</div>
+</div>
+
+<!-- Theme overlay -->
+<div id="theme-overlay" onclick="if(event.target===this)closeThemes()">
+  <h2>COLOR THEME</h2>
+  <div id="theme-options"></div>
+  <button class="btn" onclick="closeThemes()">Done</button>
 </div>
 
 <!-- Confetti container -->
@@ -411,6 +476,90 @@ const PATHS_LC = {
   y: 'M15,28 L50,68 L85,28 M50,68 L36,90 Q26,97 15,97',
   z: 'M15,20 L85,20 L15,82 L85,82',
 };
+
+// ─── Themes ───────────────────────────────────────────────
+const THEMES = {
+  Night: {
+    label: 'Night',
+    css: { '--bg': '#0d0d1f', '--panel': '#1a1a35', '--accent': '#ff2d78',
+           '--gold': '#ffd600', '--green': '#00e676', '--orange': '#ff9100',
+           '--purple': '#bb86fc', '--text': '#ffffff' },
+    guide: 'rgba(255,214,0,0.85)',
+    fill:  'rgba(255,255,255,0.09)',
+    on:    '#00e676',
+    off:   '#ff9100',
+  },
+  Paper: {
+    label: 'Paper',
+    css: { '--bg': '#f0e8d0', '--panel': '#8b5e2a', '--accent': '#e8603c',
+           '--gold': '#c0392b', '--green': '#2e7d32', '--orange': '#e65100',
+           '--purple': '#6a1b9a', '--text': '#2c1a00' },
+    guide: 'rgba(33,150,243,0.9)',
+    fill:  'rgba(0,0,0,0.07)',
+    on:    '#2e7d32',
+    off:   '#c62828',
+  },
+  Chalk: {
+    label: 'Chalk',
+    css: { '--bg': '#2e4034', '--panel': '#1e2d24', '--accent': '#7ec897',
+           '--gold': '#ffe066', '--green': '#a5d6a7', '--orange': '#ff7eb3',
+           '--purple': '#ce93d8', '--text': '#f0fff4' },
+    guide: 'rgba(255,255,245,0.88)',
+    fill:  'rgba(255,255,245,0.08)',
+    on:    '#ffe066',
+    off:   '#ff7eb3',
+  },
+  Candy: {
+    label: 'Candy',
+    css: { '--bg': '#1a0a2e', '--panel': '#2d1060', '--accent': '#ff5fa0',
+           '--gold': '#ffee00', '--green': '#00e5ff', '--orange': '#ff9100',
+           '--purple': '#ea80fc', '--text': '#ffffff' },
+    guide: 'rgba(255,120,220,0.9)',
+    fill:  'rgba(255,120,220,0.09)',
+    on:    '#00e5ff',
+    off:   '#ffee00',
+  },
+};
+
+let activeThemeName = 'Night';
+let themeColors = { ...THEMES.Night };
+
+function applyTheme(name) {
+  activeThemeName = name;
+  const t = THEMES[name];
+  for (const [k, v] of Object.entries(t.css))
+    document.documentElement.style.setProperty(k, v);
+  themeColors = { guide: t.guide, fill: t.fill, on: t.on, off: t.off };
+  document.querySelectorAll('.theme-swatch').forEach(s => {
+    s.classList.toggle('selected', s.dataset.theme === name);
+  });
+  renderLetter();
+}
+
+function buildThemeOptions() {
+  const wrap = document.getElementById('theme-options');
+  wrap.innerHTML = '';
+  for (const [name, t] of Object.entries(THEMES)) {
+    const opt = document.createElement('div');
+    opt.className = 'theme-option';
+    const swatch = document.createElement('div');
+    swatch.className = 'theme-swatch' + (name === activeThemeName ? ' selected' : '');
+    swatch.dataset.theme = name;
+    swatch.style.background   = t.css['--bg'];
+    swatch.style.borderColor  = t.css['--accent'];
+    swatch.innerHTML = `<span style="color:${t.guide};font-size:1.7rem;text-shadow:0 0 8px ${t.guide};line-height:1">A</span>`;
+    swatch.addEventListener('click', () => { applyTheme(name); closeThemes(); });
+    const label = document.createElement('div');
+    label.className = 'theme-label';
+    label.textContent = t.label;
+    opt.appendChild(swatch);
+    opt.appendChild(label);
+    wrap.appendChild(opt);
+  }
+}
+
+function openThemes()  { buildThemeOptions(); document.getElementById('theme-overlay').classList.add('open'); }
+function closeThemes() { document.getElementById('theme-overlay').classList.remove('open'); }
 
 // ─── State ───────────────────────────────────────────────
 let letterIndex   = 0;
@@ -509,7 +658,7 @@ function renderLetterLine() {
   const p2d = new Path2D();
   p2d.addPath(new Path2D(getPathStr()), matrix);
 
-  guideCtx.strokeStyle = 'rgba(255,214,0,0.85)';
+  guideCtx.strokeStyle = themeColors.guide;
   guideCtx.lineWidth   = lw;
   guideCtx.lineCap     = 'round';
   guideCtx.lineJoin    = 'round';
@@ -539,17 +688,16 @@ function renderLetterBlock() {
   guideCtx.clearRect(0, 0, W, H);
 
   guideCtx.save();
-  guideCtx.globalAlpha  = 0.09;
-  guideCtx.fillStyle    = '#ffffff';
   guideCtx.font         = fontStr;
   guideCtx.textBaseline = 'alphabetic';
+  guideCtx.fillStyle    = themeColors.fill;
   guideCtx.fillText(getLetter(), tx, ty);
   guideCtx.restore();
 
   guideCtx.save();
   guideCtx.font         = fontStr;
   guideCtx.textBaseline = 'alphabetic';
-  guideCtx.strokeStyle  = 'rgba(255,214,0,0.7)';
+  guideCtx.strokeStyle  = themeColors.guide;
   guideCtx.lineWidth    = Math.max(3, fontSize * 0.022);
   guideCtx.lineCap      = 'round';
   guideCtx.lineJoin     = 'round';
@@ -690,7 +838,7 @@ function contDraw({ x, y }) {
 
 function paintSegment(x1, y1, x2, y2) {
   const onLetter = markCoverage(x2, y2);
-  const color    = onLetter ? '#00e676' : '#ff9100';
+  const color    = onLetter ? themeColors.on : themeColors.off;
   const lw       = STROKE_CSS * dpr;
 
   drawCtx.save();
