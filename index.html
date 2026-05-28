@@ -339,28 +339,86 @@
 
 <script>
 // ─── Constants ───────────────────────────────────────────
-const ALPHABET         = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const GRID_SIZE        = 38;       // bucket grid resolution
-const COVER_THRESHOLD  = 0.80;     // fraction of letter buckets needed
-const STROKE_CSS       = 15;       // drawing line width (CSS px)
-const DETECT_RADIUS    = 20;       // coverage detection radius (CSS px)
-const CELEB_MESSAGES   = ['Amazing!','Great job!','Perfect!','Awesome!','You did it!','Superstar!'];
+const ALPHABET        = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const COVER_THRESHOLD = 0.78;    // fraction of waypoints the child must visit
+const STROKE_CSS      = 15;      // drawing stroke width (CSS px)
+const DETECT_RADIUS   = 25;      // waypoint-hit radius (CSS px)
+const CELEB_MESSAGES  = ['Amazing!','Great job!','Perfect!','Awesome!','You did it!','Superstar!'];
+
+// ─── Letter paths (0–100 × 0–100 coordinate space) ───────
+// Uppercase — each letter as a single SVG path string (multiple sub-paths via M)
+const PATHS_UC = {
+  A: 'M50,5 L8,95 M50,5 L92,95 M22,62 L78,62',
+  B: 'M20,5 L20,95 M20,5 Q72,5 72,27 Q72,50 20,50 M20,50 Q76,50 76,72 Q76,95 20,95',
+  C: 'M85,18 Q82,5 50,5 Q8,5 8,50 Q8,95 50,95 Q82,95 85,82',
+  D: 'M20,5 L20,95 M20,5 Q88,5 88,50 Q88,95 20,95',
+  E: 'M78,5 L20,5 L20,95 L78,95 M20,50 L68,50',
+  F: 'M78,5 L20,5 L20,95 M20,50 L68,50',
+  G: 'M85,18 Q82,5 50,5 Q8,5 8,50 Q8,95 50,95 Q82,95 85,82 L85,52 L54,52',
+  H: 'M20,5 L20,95 M80,5 L80,95 M20,50 L80,50',
+  I: 'M35,5 L65,5 M50,5 L50,95 M35,95 L65,95',
+  J: 'M72,5 L72,72 Q72,95 50,95 Q25,95 25,78',
+  K: 'M20,5 L20,95 M20,50 L80,5 M20,50 L80,95',
+  L: 'M20,5 L20,95 L80,95',
+  M: 'M12,95 L12,5 L50,52 L88,5 L88,95',
+  N: 'M20,95 L20,5 L80,95 L80,5',
+  O: 'M50,5 Q8,5 8,50 Q8,95 50,95 Q92,95 92,50 Q92,5 50,5',
+  P: 'M20,5 L20,95 M20,5 Q78,5 78,27 Q78,50 20,50',
+  Q: 'M50,5 Q8,5 8,50 Q8,95 50,95 Q92,95 92,50 Q92,5 50,5 M63,73 L90,96',
+  R: 'M20,5 L20,95 M20,5 Q78,5 78,27 Q78,50 20,50 M48,50 L85,95',
+  S: 'M82,18 Q82,5 50,5 Q12,5 12,28 Q12,50 50,50 Q88,50 88,72 Q88,95 50,95 Q18,95 18,82',
+  T: 'M8,5 L92,5 M50,5 L50,95',
+  U: 'M20,5 L20,68 Q20,95 50,95 Q80,95 80,68 L80,5',
+  V: 'M8,5 L50,95 L92,5',
+  W: 'M5,5 L28,95 L50,55 L72,95 L95,5',
+  X: 'M8,5 L92,95 M92,5 L8,95',
+  Y: 'M8,5 L50,50 L92,5 M50,50 L50,95',
+  Z: 'M8,5 L92,5 L8,95 L92,95',
+};
+
+// Lowercase — x-height sits roughly y 28–82; ascenders reach y 5; descenders reach y 95
+const PATHS_LC = {
+  a: 'M78,35 Q78,18 50,18 Q18,18 18,52 Q18,82 50,82 Q78,82 78,52 L78,82',
+  b: 'M22,5 L22,82 M22,55 Q22,18 50,18 Q80,18 80,50 Q80,82 50,82 Q22,82 22,65',
+  c: 'M80,35 Q80,18 50,18 Q18,18 18,50 Q18,82 50,82 Q80,82 80,65',
+  d: 'M78,5 L78,82 M78,55 Q78,18 50,18 Q18,18 18,50 Q18,82 50,82 Q78,82 78,65',
+  e: 'M18,48 L82,48 Q82,18 50,18 Q18,18 18,50 Q18,82 50,82 Q80,82 80,65',
+  f: 'M72,8 Q58,3 52,18 L52,82 M32,40 L68,40',
+  g: 'M78,28 Q78,12 50,12 Q20,12 20,42 Q20,68 50,68 Q78,68 78,42 L78,80 Q78,97 50,97 Q30,97 28,88',
+  h: 'M20,5 L20,82 M20,48 Q20,18 50,18 Q80,18 80,48 L80,82',
+  i: 'M50,8 L50,17 M50,27 L50,82',
+  j: 'M60,8 L60,17 M60,27 L60,82 Q60,97 40,97 Q25,97 25,88',
+  k: 'M20,5 L20,82 M20,48 L72,18 M42,40 L78,82',
+  l: 'M50,5 L50,82',
+  m: 'M15,28 L15,82 M15,50 Q15,18 40,18 Q58,18 58,48 M58,50 Q58,18 78,18 Q90,18 90,48 L90,82',
+  n: 'M20,28 L20,82 M20,50 Q20,18 50,18 Q80,18 80,48 L80,82',
+  o: 'M50,18 Q18,18 18,50 Q18,82 50,82 Q82,82 82,50 Q82,18 50,18',
+  p: 'M20,28 L20,97 M20,52 Q20,18 50,18 Q80,18 80,50 Q80,82 50,82 Q20,82 20,65',
+  q: 'M80,28 L80,97 M80,52 Q80,18 50,18 Q20,18 20,50 Q20,82 50,82 Q80,82 80,65',
+  r: 'M20,28 L20,82 M20,48 Q20,24 55,20 L68,18',
+  s: 'M78,32 Q78,18 50,18 Q18,18 18,38 Q18,55 50,55 Q82,55 82,70 Q82,82 50,82 Q22,82 22,70',
+  t: 'M50,5 L50,82 M28,32 L68,32',
+  u: 'M20,28 L20,65 Q20,82 50,82 Q80,82 80,65 L80,28',
+  v: 'M15,28 L50,82 L85,28',
+  w: 'M10,28 L30,82 L50,55 L70,82 L90,28',
+  x: 'M15,20 L85,82 M85,20 L15,82',
+  y: 'M15,28 L50,68 L85,28 M50,68 L36,90 Q26,97 15,97',
+  z: 'M15,20 L85,20 L15,82 L85,82',
+};
 
 // ─── State ───────────────────────────────────────────────
-let letterIndex = 0;
-let isUppercase = true;
-let totalStars  = 0;
-let celebrated  = false;
-const SIZE_STEPS   = [0.30, 0.38, 0.46, 0.54, 0.62, 0.70, 0.78];
-let sizeStepIndex  = 4; // default = 0.62
-let isDrawing   = false;
+let letterIndex   = 0;
+let isUppercase   = true;
+let totalStars    = 0;
+let celebrated    = false;
+const SIZE_STEPS  = [0.30, 0.38, 0.46, 0.54, 0.62, 0.70, 0.78];
+let sizeStepIndex = 4; // default = 0.62
+let isDrawing     = false;
 let lastX = 0, lastY = 0;
 
-// Pixel map
-let pixelData     = null;
-let letterBuckets = new Set();
-let coveredBuckets = new Set();
-let mapWidth = 0, mapHeight = 0;
+// Waypoint coverage
+let waypoints        = [];   // [[physX, physY], …] sampled along letter path
+let visitedWaypoints = new Set();
 
 // ─── Canvas setup ────────────────────────────────────────
 const guideCanvas = document.getElementById('guide-canvas');
@@ -407,126 +465,94 @@ function getLetter() {
   return isUppercase ? ALPHABET[letterIndex] : ALPHABET[letterIndex].toLowerCase();
 }
 
+function getPathStr() {
+  return isUppercase ? PATHS_UC[getLetter()] : PATHS_LC[getLetter()];
+}
+
+// Returns { ox, oy, scale } mapping 0-100 path space → physical canvas pixels
+function letterTransform() {
+  const W = guideCanvas.width, H = guideCanvas.height;
+  const size = SIZE_STEPS[sizeStepIndex] * Math.min(W, H);
+  return { ox: (W - size) / 2, oy: (H - size) / 2, scale: size / 100 };
+}
+
 // ─── Render guide ─────────────────────────────────────────
 function renderLetter() {
-  const W = guideCanvas.width;
-  const H = guideCanvas.height;
-
-  // Font sized to fit with padding
-  const fontSize = Math.min(W, H) * SIZE_STEPS[sizeStepIndex];
-  const fontStr  = `bold ${fontSize}px 'Arial Black','Helvetica Neue',Arial,sans-serif`;
-
-  // Measure to center precisely (handles descenders on g,j,p,q,y)
-  guideCtx.font         = fontStr;
-  guideCtx.textBaseline = 'alphabetic';
-  const m    = guideCtx.measureText(getLetter());
-  const inkW = m.width;
-  const inkH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
-  const tx   = (W - inkW) / 2;
-  const ty   = (H - inkH) / 2 + m.actualBoundingBoxAscent;
+  const W = guideCanvas.width, H = guideCanvas.height;
+  const { ox, oy, scale } = letterTransform();
+  const lw = Math.max(4 * dpr, scale * 0.055); // line width in physical px
 
   guideCtx.clearRect(0, 0, W, H);
 
-  // Faint filled letter (the target shape)
-  guideCtx.save();
-  guideCtx.globalAlpha = 0.09;
-  guideCtx.fillStyle   = '#ffffff';
-  guideCtx.font        = fontStr;
-  guideCtx.textBaseline = 'alphabetic';
-  guideCtx.fillText(getLetter(), tx, ty);
-  guideCtx.restore();
+  // Build a transformed Path2D using DOMMatrix (no context transform needed)
+  const matrix = new DOMMatrix([scale, 0, 0, scale, ox, oy]);
+  const p2d = new Path2D();
+  p2d.addPath(new Path2D(getPathStr()), matrix);
 
-  // Dashed gold outline
-  guideCtx.save();
-  guideCtx.font         = fontStr;
-  guideCtx.textBaseline = 'alphabetic';
-  guideCtx.strokeStyle  = 'rgba(255,214,0,0.7)';
-  guideCtx.lineWidth    = Math.max(3, fontSize * 0.022);
-  guideCtx.lineCap      = 'round';
-  guideCtx.lineJoin     = 'round';
-  // gap > dash so blocks don't crowd at corners; round caps extend each dash
-  // by lineWidth/2 per end, so visual dash ≈ gap at this ratio
-  guideCtx.setLineDash([fontSize * 0.028, fontSize * 0.052]);
-  guideCtx.strokeText(getLetter(), tx, ty);
-  guideCtx.restore();
+  // Dashed gold guide line
+  guideCtx.strokeStyle = 'rgba(255,214,0,0.85)';
+  guideCtx.lineWidth   = lw;
+  guideCtx.lineCap     = 'round';
+  guideCtx.lineJoin    = 'round';
+  guideCtx.setLineDash([lw * 1.2, lw * 2.0]);
+  guideCtx.stroke(p2d);
+  guideCtx.setLineDash([]);
 
-  // Update header
   document.getElementById('letter-display').textContent = getLetter();
 
-  // Build coverage map
-  buildPixelMap(fontStr, tx, ty, W, H);
+  buildWaypoints();
   resetDrawing();
-  placeStartHint(tx, ty, m, W, H);
-}
 
-// ─── Pixel / bucket map ───────────────────────────────────
-function buildPixelMap(fontStr, tx, ty, W, H) {
-  const off = document.createElement('canvas');
-  off.width  = W; off.height = H;
-  const ctx  = off.getContext('2d', { willReadFrequently: true });
-  ctx.font         = fontStr;
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle    = '#ffffff';
-  ctx.fillText(getLetter(), tx, ty);
-
-  pixelData  = ctx.getImageData(0, 0, W, H);
-  mapWidth   = W; mapHeight = H;
-  letterBuckets.clear();
-
-  const step = Math.max(1, Math.round(dpr * 1.5));
-  for (let py = 0; py < H; py += step) {
-    for (let px = 0; px < W; px += step) {
-      if (pixelData.data[(py * W + px) * 4 + 3] > 60) {
-        letterBuckets.add(toBucket(px, py));
-      }
-    }
+  // Pulse dot at the first point of the path
+  if (waypoints.length > 0) {
+    const [wpx, wpy] = waypoints[0];
+    placeStartHintAt(wpx / dpr, wpy / dpr);
   }
 }
 
-function toBucket(px, py) {
-  const bx = Math.min(GRID_SIZE - 1, Math.floor(px * GRID_SIZE / mapWidth));
-  const by = Math.min(GRID_SIZE - 1, Math.floor(py * GRID_SIZE / mapHeight));
-  return by * GRID_SIZE + bx;
+// ─── Waypoint map ─────────────────────────────────────────
+function buildWaypoints() {
+  const { ox, oy, scale } = letterTransform();
+  const pathStr = getPathStr();
+
+  // Use a hidden SVG element to sample points along the path
+  const ns  = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:visible';
+  document.body.appendChild(svg);
+  const el = document.createElementNS(ns, 'path');
+  el.setAttribute('d', pathStr);
+  svg.appendChild(el);
+
+  const totalLen = el.getTotalLength();
+  // One waypoint roughly every 6 units in path space (≈ 6% of letter size)
+  const numPts = Math.max(20, Math.ceil(totalLen / 6));
+  waypoints = [];
+  for (let i = 0; i <= numPts; i++) {
+    const pt = el.getPointAtLength(totalLen * i / numPts);
+    waypoints.push([ox + pt.x * scale, oy + pt.y * scale]);
+  }
+
+  document.body.removeChild(svg);
+  visitedWaypoints = new Set();
 }
 
 // ─── Coverage detection ───────────────────────────────────
 function markCoverage(cssX, cssY) {
-  const px  = cssX * dpr;
-  const py  = cssY * dpr;
-  const r   = DETECT_RADIUS * dpr;
-  const bx  = Math.floor(px * GRID_SIZE / mapWidth);
-  const by  = Math.floor(py * GRID_SIZE / mapHeight);
-  const cW  = mapWidth  / GRID_SIZE;
-  const cH  = mapHeight / GRID_SIZE;
-  const br  = Math.ceil(r / Math.min(cW, cH)) + 1;
+  const px = cssX * dpr, py = cssY * dpr;
+  const r2 = (DETECT_RADIUS * dpr) ** 2;
+  let onPath = false;
 
-  for (let dy = -br; dy <= br; dy++) {
-    for (let dx = -br; dx <= br; dx++) {
-      const tbx = bx + dx, tby = by + dy;
-      if (tbx < 0 || tby < 0 || tbx >= GRID_SIZE || tby >= GRID_SIZE) continue;
-      const b = tby * GRID_SIZE + tbx;
-      if (letterBuckets.has(b)) coveredBuckets.add(b);
-    }
+  for (let i = 0; i < waypoints.length; i++) {
+    const dx = px - waypoints[i][0], dy = py - waypoints[i][1];
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= r2) { visitedWaypoints.add(i); onPath = true; }
   }
-  return isNearLetter(px, py, r);
-}
-
-function isNearLetter(px, py, r) {
-  if (!pixelData) return false;
-  const step = Math.max(2, Math.round(r / 7));
-  for (let dy = -r; dy <= r; dy += step) {
-    for (let dx = -r; dx <= r; dx += step) {
-      if (dx * dx + dy * dy > r * r) continue;
-      const tx = Math.round(px + dx), ty = Math.round(py + dy);
-      if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) continue;
-      if (pixelData.data[(ty * mapWidth + tx) * 4 + 3] > 60) return true;
-    }
-  }
-  return false;
+  return onPath;
 }
 
 function getCoverage() {
-  return letterBuckets.size > 0 ? coveredBuckets.size / letterBuckets.size : 0;
+  return waypoints.length > 0 ? visitedWaypoints.size / waypoints.length : 0;
 }
 
 // ─── Drawing ──────────────────────────────────────────────
@@ -633,49 +659,38 @@ function spawnConfetti() {
   setTimeout(() => { container.innerHTML = ''; }, 2200);
 }
 
-// ─── Start hint (pulsing dot) ─────────────────────────────
-function placeStartHint(tx, ty, metrics, W, H) {
+// ─── Start hint (pulsing dot at path start) ───────────────
+function placeStartHintAt(cssX, cssY) {
   const hint = document.getElementById('start-hint');
   hint.innerHTML = '';
-
-  // Top of letter in physical px → convert to CSS %
-  const inkTop = ty - metrics.actualBoundingBoxAscent;
-  const cssPctX = ((tx + metrics.width * 0.08) / W) * 100;
-  const cssPctY = (inkTop / H) * 100;
-
-  const dot = document.createElement('div');
+  const wCss = guideCanvas.width  / dpr;
+  const hCss = guideCanvas.height / dpr;
+  const dot  = document.createElement('div');
   dot.className = 'start-pulse';
-  const dotSize = Math.max(16, STROKE_CSS * 1.4);
+  const ds = Math.max(16, STROKE_CSS * 1.4);
   dot.style.cssText = `
-    width:${dotSize}px; height:${dotSize}px;
-    left:calc(${cssPctX.toFixed(1)}% - ${dotSize/2}px);
-    top:calc(${cssPctY.toFixed(1)}% - ${dotSize/2}px);
+    width:${ds}px; height:${ds}px;
+    left:calc(${(cssX / wCss * 100).toFixed(1)}% - ${ds/2}px);
+    top:calc(${(cssY / hCss * 100).toFixed(1)}% - ${ds/2}px);
   `;
   hint.appendChild(dot);
-
-  // Hide after 3 s so it doesn't distract during tracing
   setTimeout(() => { if (dot.parentNode) dot.remove(); }, 3000);
 }
 
 // ─── Controls ─────────────────────────────────────────────
 function resetDrawing() {
   drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-  coveredBuckets.clear();
+  visitedWaypoints = new Set();
   celebrated = false;
   document.getElementById('progress-bar').style.width = '0%';
 }
 
-function clearDrawing() { resetDrawing(); placeStartHintFromState(); }
-
-function placeStartHintFromState() {
-  const W = guideCanvas.width, H = guideCanvas.height;
-  const fontSize = Math.min(W, H) * SIZE_STEPS[sizeStepIndex];
-  guideCtx.font = `bold ${fontSize}px 'Arial Black','Helvetica Neue',Arial,sans-serif`;
-  guideCtx.textBaseline = 'alphabetic';
-  const m  = guideCtx.measureText(getLetter());
-  const tx = (W - m.width) / 2;
-  const ty = (H - (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent)) / 2 + m.actualBoundingBoxAscent;
-  placeStartHint(tx, ty, m, W, H);
+function clearDrawing() {
+  resetDrawing();
+  if (waypoints.length > 0) {
+    const [wpx, wpy] = waypoints[0];
+    placeStartHintAt(wpx / dpr, wpy / dpr);
+  }
 }
 
 function prevLetter() { letterIndex = (letterIndex - 1 + 26) % 26; renderLetter(); }
