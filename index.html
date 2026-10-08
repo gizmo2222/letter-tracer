@@ -248,6 +248,12 @@
       animation: celebPop 0.5s cubic-bezier(0.175,0.885,0.32,1.275) forwards;
     }
 
+    #celebration-msg.retry {
+      color: var(--orange);
+      font-size: clamp(2rem, 9vw, 3.6rem);
+      text-shadow: 0 0 18px var(--bg), 0 0 36px var(--bg);
+    }
+
     @keyframes celebPop {
       0%   { transform: scale(0) rotate(-10deg); opacity: 0; }
       70%  { transform: scale(1.15) rotate(3deg); opacity: 1; }
@@ -284,6 +290,13 @@
       background: var(--accent);
       pointer-events: none;
       z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 900;
+      line-height: 1;
       animation: pulse 1.2s ease-in-out infinite;
     }
 
@@ -354,12 +367,12 @@
 <!-- Top bar -->
 <div id="topbar">
   <div id="app-title">LETTER TRACER</div>
-  <button class="btn" id="case-btn" onclick="toggleCase()">Aa</button>
-  <button class="btn" id="theme-btn" onclick="openThemes()" style="padding:7px 10px" title="Color theme">🎨</button>
+  <button class="btn" id="case-btn" onclick="toggleCase()" aria-label="Switch between capital and small letters">Aa</button>
+  <button class="btn" id="theme-btn" onclick="openThemes()" style="padding:7px 10px" title="Color theme" aria-label="Color theme">🎨</button>
   <div id="nav">
-    <button class="arrow-btn" onclick="prevLetter()">◀</button>
-    <div id="letter-display" onclick="openGrid()" title="Pick a letter">A</div>
-    <button class="arrow-btn" onclick="nextLetter()">▶</button>
+    <button class="arrow-btn" onclick="prevLetter()" aria-label="Previous letter">◀</button>
+    <div id="letter-display" onclick="openGrid()" title="Pick a letter" role="button" tabindex="0" aria-label="Pick a letter">A</div>
+    <button class="arrow-btn" onclick="nextLetter()" aria-label="Next letter">▶</button>
   </div>
 </div>
 
@@ -372,12 +385,12 @@
 
 <!-- Bottom bar -->
 <div id="bottombar">
-  <div id="stars-display"></div>
+  <div id="stars-display" role="status"></div>
   <div id="size-ctrl">
-    <button class="btn size-btn" onclick="adjustSize(-1)">−</button>
-    <button class="btn size-btn" onclick="adjustSize(+1)">+</button>
+    <button class="btn size-btn" onclick="adjustSize(-1)" aria-label="Smaller letter">−</button>
+    <button class="btn size-btn" onclick="adjustSize(+1)" aria-label="Bigger letter">+</button>
   </div>
-  <button class="btn" id="mode-btn" onclick="toggleMode()">Lines</button>
+  <button class="btn" id="mode-btn" onclick="toggleMode()" aria-label="Switch between line and block letters">Lines</button>
   <div id="progress-wrap">
     <div id="progress-bg">
       <div id="progress-bar"></div>
@@ -394,7 +407,7 @@
 </div>
 
 <!-- Celebration overlay -->
-<div id="celebration-overlay">
+<div id="celebration-overlay" role="status" aria-live="polite">
   <div id="celebration-msg">Amazing!</div>
 </div>
 
@@ -411,10 +424,15 @@
 <script>
 // ─── Constants ───────────────────────────────────────────
 const ALPHABET        = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const COVER_THRESHOLD = 0.78;    // fraction of waypoints the child must visit
+const COVER_THRESHOLD = 0.80;    // Blocks mode: share of the letter the child must colour in
+const STROKE_DONE     = 0.85;    // Lines mode: share of a stroke traced, in order, to finish it
+const ACCURACY_MIN    = 0.60;    // share of the ink that must land on the letter to earn a star
+const ORDER_SLACK     = 3;       // Lines mode: points ahead of the finger that still count (absorbs jitter)
 const STROKE_CSS      = 15;      // drawing stroke width (CSS px)
-const DETECT_RADIUS   = 25;      // waypoint-hit radius (CSS px)
+const DETECT_RADIUS   = 25;      // on-letter hit radius (CSS px)
 const CELEB_MESSAGES  = ['Amazing!','Great job!','Perfect!','Awesome!','You did it!','Superstar!'];
+const RETRY_MESSAGES  = ['Stay on the line!','Almost! Try again','Follow the dots!'];
+const STORE_KEY       = 'lettertracer:v1';
 
 // ─── Letter paths (0–100 × 0–100 coordinate space) ───────
 // Uppercase — each letter as a single SVG path string (multiple sub-paths via M)
@@ -524,7 +542,8 @@ const THEMES = {
 let activeThemeName = 'Night';
 let themeColors = { ...THEMES.Night };
 
-function applyTheme(name) {
+// Sets the theme's colours without re-rendering (used at start-up)
+function applyThemeVars(name) {
   activeThemeName = name;
   const t = THEMES[name];
   for (const [k, v] of Object.entries(t.css))
@@ -533,7 +552,12 @@ function applyTheme(name) {
   document.querySelectorAll('.theme-swatch').forEach(s => {
     s.classList.toggle('selected', s.dataset.theme === name);
   });
-  renderLetter();
+}
+
+function applyTheme(name) {
+  applyThemeVars(name);
+  savePrefs();
+  renderLetter(true);   // redraw the child's ink in the new colours
 }
 
 function buildThemeOptions() {
@@ -545,6 +569,8 @@ function buildThemeOptions() {
     const swatch = document.createElement('div');
     swatch.className = 'theme-swatch' + (name === activeThemeName ? ' selected' : '');
     swatch.dataset.theme = name;
+    swatch.setAttribute('role', 'button');
+    swatch.setAttribute('aria-label', `${t.label} theme`);
     swatch.style.background   = t.css['--bg'];
     swatch.style.borderColor  = t.css['--accent'];
     swatch.innerHTML = `<span style="color:${t.guide};font-size:1.7rem;text-shadow:0 0 8px ${t.guide};line-height:1">A</span>`;
@@ -571,17 +597,48 @@ const SIZE_STEPS  = [0.30, 0.38, 0.46, 0.54, 0.62, 0.70, 0.78];
 let sizeStepIndex = 4;
 let isDrawing     = false;
 let lastX = 0, lastY = 0;
+let replaying     = false;  // true while redrawing logged ink (no celebrations)
+let retryTimer    = null;   // set while the "try again" message is showing
 
-// Line-mode coverage (waypoint proximity)
-let waypoints        = [];
-let visitedWaypoints = new Set();
+// Lines mode: one entry per stroke, traced in order
+//   { d: path string, pts: [[x, y], ...] in canvas px, frontier: last point reached in order }
+let strokes       = [];
+let currentStroke = 0;
 
-// Block-mode coverage (pixel buckets)
+// Blocks mode coverage (pixel buckets)
 const GRID_SIZE    = 38;
 let pixelData      = null;
+let blockGeom      = null;
 let letterBuckets  = new Set();
 let coveredBuckets = new Set();
 let mapWidth = 0, mapHeight = 0;
+
+// The child's ink, kept in letter space (0–100) so it survives resizes,
+// rotation, size and theme changes. One array of points per finger stroke.
+let inkLog = [];
+let inkOn = 0, inkOff = 0;   // length of ink drawn on / off the letter
+
+// ─── Saved preferences ────────────────────────────────────
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+    if (THEMES[p.theme]) activeThemeName = p.theme;
+    if (typeof p.upper === 'boolean')    isUppercase = p.upper;
+    if (typeof p.lineMode === 'boolean') isLineMode  = p.lineMode;
+    if (Number.isInteger(p.size) && p.size >= 0 && p.size < SIZE_STEPS.length) sizeStepIndex = p.size;
+    if (Number.isInteger(p.stars) && p.stars >= 0) totalStars = p.stars;
+    if (Number.isInteger(p.letter) && p.letter >= 0 && p.letter < 26) letterIndex = p.letter;
+  } catch { /* private mode or blocked storage: use defaults */ }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      theme: activeThemeName, upper: isUppercase, lineMode: isLineMode,
+      size: sizeStepIndex, stars: totalStars, letter: letterIndex,
+    }));
+  } catch { /* not saved; the app still works */ }
+}
 
 // ─── Canvas setup ────────────────────────────────────────
 const guideCanvas = document.getElementById('guide-canvas');
@@ -592,8 +649,10 @@ const dpr         = Math.min(window.devicePixelRatio || 1, 3);
 
 // ─── Init ─────────────────────────────────────────────────
 function init() {
+  loadPrefs();
+  applyThemeVars(activeThemeName);
   buildLetterGrid();
-  adjustSize(0); // set initial disabled states
+  syncControls();
   resize();
   window.addEventListener('resize', debounce(resize, 120));
 
@@ -602,11 +661,35 @@ function init() {
   drawCanvas.addEventListener('touchend',   onTouchEnd,   { passive: false });
   drawCanvas.addEventListener('mousedown',  e => startDraw(mousePos(e)));
   drawCanvas.addEventListener('mousemove',  e => { if (isDrawing) contDraw(mousePos(e)); });
-  window.addEventListener('mouseup', () => { isDrawing = false; });
+  window.addEventListener('mouseup', endDraw);
+  document.getElementById('letter-display').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openGrid(); }
+  });
 }
 
 function debounce(fn, ms) {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+// Button labels, colours and enabled states that follow the current settings
+function syncControls() {
+  const caseBtn = document.getElementById('case-btn');
+  caseBtn.textContent       = isUppercase ? 'Aa' : 'aA';
+  caseBtn.style.color       = isUppercase ? 'var(--orange)' : 'var(--purple)';
+  caseBtn.style.borderColor = caseBtn.style.color;
+
+  const modeBtn = document.getElementById('mode-btn');
+  modeBtn.textContent       = isLineMode ? 'Lines' : 'Blocks';
+  modeBtn.style.color       = isLineMode ? '#40c4ff' : 'var(--green)';
+  modeBtn.style.borderColor = modeBtn.style.color;
+
+  document.querySelector('.size-btn:first-child').disabled = sizeStepIndex === 0;
+  document.querySelector('.size-btn:last-child').disabled  = sizeStepIndex === SIZE_STEPS.length - 1;
+
+  const shown = totalStars ? ((totalStars - 1) % 5) + 1 : 0;
+  const stars = document.getElementById('stars-display');
+  stars.textContent = '⭐'.repeat(shown);
+  stars.setAttribute('aria-label', `${totalStars} star${totalStars === 1 ? '' : 's'}`);
 }
 
 // ─── Resize ───────────────────────────────────────────────
@@ -620,7 +703,7 @@ function resize() {
     c.width  = Math.round(w * dpr);
     c.height = Math.round(h * dpr);
   }
-  renderLetter();
+  renderLetter(true);   // keep what the child has drawn (e.g. on rotation)
 }
 
 // ─── Current letter ───────────────────────────────────────
@@ -632,58 +715,191 @@ function getPathStr() {
   return isUppercase ? PATHS_UC[getLetter()] : PATHS_LC[getLetter()];
 }
 
-// Returns { ox, oy, scale } mapping 0-100 path space → physical canvas pixels
+// Returns { ox, oy, scale } mapping 0-100 letter space → physical canvas pixels
 function letterTransform() {
   const W = guideCanvas.width, H = guideCanvas.height;
   const size = SIZE_STEPS[sizeStepIndex] * Math.min(W, H);
   return { ox: (W - size) / 2, oy: (H - size) / 2, scale: size / 100 };
 }
 
-// ─── Render guide ─────────────────────────────────────────
-function renderLetter() {
-  if (isLineMode) renderLetterLine();
-  else            renderLetterBlock();
-  document.getElementById('letter-display').textContent = getLetter();
-  resetDrawing();
+function toLetterSpace({ x, y }) {
+  const { ox, oy, scale } = letterTransform();
+  return [(x * dpr - ox) / scale, (y * dpr - oy) / scale];
 }
 
-function renderLetterLine() {
-  const W = guideCanvas.width, H = guideCanvas.height;
+function fromLetterSpace([lx, ly]) {
   const { ox, oy, scale } = letterTransform();
-  const lw = Math.max(4 * dpr, scale * 0.055);
+  return { x: (ox + lx * scale) / dpr, y: (oy + ly * scale) / dpr };
+}
 
-  guideCtx.clearRect(0, 0, W, H);
+// ─── Render ───────────────────────────────────────────────
+// Rebuilds the guide and coverage from scratch. With keepInk, the child's
+// logged ink is replayed on top (recomputing progress); otherwise it starts over.
+function renderLetter(keepInk = false) {
+  document.getElementById('letter-display').textContent = getLetter();
+  if (!keepInk) {
+    inkLog = [];
+    celebrated = false;
+    cancelRetry();
+  }
 
-  const matrix = new DOMMatrix([scale, 0, 0, scale, ox, oy]);
-  const p2d = new Path2D();
-  p2d.addPath(new Path2D(getPathStr()), matrix);
+  if (isLineMode) buildStrokes();
+  else            buildPixelMap();
+  resetCoverage();
 
-  guideCtx.strokeStyle = themeColors.guide;
-  guideCtx.lineWidth   = lw;
-  guideCtx.lineCap     = 'round';
-  guideCtx.lineJoin    = 'round';
-  guideCtx.setLineDash([lw * 1.2, lw * 2.0]);
-  guideCtx.stroke(p2d);
-  guideCtx.setLineDash([]);
+  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  replaying = true;
+  for (const pts of inkLog) replayInk(pts);
+  replaying = false;
 
-  buildWaypoints();
-  if (waypoints.length > 0) {
-    const [wpx, wpy] = waypoints[0];
-    placeStartHintAt(wpx / dpr, wpy / dpr);
+  drawGuide();
+  updateProgress();
+}
+
+function resetCoverage() {
+  strokes.forEach(s => { s.frontier = -1; });
+  currentStroke = 0;
+  coveredBuckets.clear();
+  inkOn = inkOff = 0;
+}
+
+function replayInk(pts) {
+  if (!pts.length) return;
+  let prev = fromLetterSpace(pts[0]);
+  paintSegment(prev.x, prev.y, prev.x, prev.y);
+  for (let i = 1; i < pts.length; i++) {
+    const cur = fromLetterSpace(pts[i]);
+    paintSegment(prev.x, prev.y, cur.x, cur.y);
+    prev = cur;
   }
 }
 
-function renderLetterBlock() {
+function drawGuide() {
+  if (isLineMode) drawLineGuide();
+  else            drawBlockGuide();
+}
+
+// ─── Lines mode: strokes ──────────────────────────────────
+function buildStrokes() {
+  const { ox, oy, scale } = letterTransform();
+  // Each "M" starts a new stroke; the path data lists them in writing order
+  const parts = getPathStr().split(/(?=M)/).map(s => s.trim()).filter(Boolean);
+
+  // Use a hidden SVG element to sample points along each stroke
+  const ns  = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:visible';
+  document.body.appendChild(svg);
+
+  strokes = parts.map(d => {
+    const el = document.createElementNS(ns, 'path');
+    el.setAttribute('d', d);
+    svg.appendChild(el);
+    const len = el.getTotalLength();
+    // One point roughly every 6 units of letter space, at least 6 per stroke
+    const n = Math.max(6, Math.ceil(len / 6));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const pt = el.getPointAtLength(len * i / n);
+      pts.push([ox + pt.x * scale, oy + pt.y * scale]);
+    }
+    return { d, pts, frontier: -1 };
+  });
+
+  document.body.removeChild(svg);
+}
+
+function drawLineGuide() {
+  const W = guideCanvas.width, H = guideCanvas.height;
+  const { ox, oy, scale } = letterTransform();
+  const lw = Math.max(4 * dpr, scale * 0.055);
+  const matrix = new DOMMatrix([scale, 0, 0, scale, ox, oy]);
+
+  guideCtx.clearRect(0, 0, W, H);
+  guideCtx.strokeStyle = themeColors.guide;
+  guideCtx.lineCap     = 'round';
+  guideCtx.lineJoin    = 'round';
+
+  strokes.forEach((s, i) => {
+    const p2d = new Path2D();
+    p2d.addPath(new Path2D(s.d), matrix);
+    const isCurrent = i === currentStroke;
+    // The stroke to trace now is bright and slightly bolder; the others recede
+    guideCtx.globalAlpha = isCurrent ? 1 : (i < currentStroke ? 0.3 : 0.45);
+    guideCtx.lineWidth   = isCurrent ? lw * 1.15 : lw;
+    guideCtx.setLineDash([lw * 1.2, lw * 2.0]);
+    guideCtx.stroke(p2d);
+  });
+  guideCtx.globalAlpha = 1;
+  guideCtx.setLineDash([]);
+
+  if (currentStroke < strokes.length) {
+    const s = strokes[currentStroke];
+    drawDirectionArrow(s.pts, lw);
+    const label = strokes.length > 1 ? String(currentStroke + 1) : '';
+    placeStartHintAt(s.pts[0][0] / dpr, s.pts[0][1] / dpr, label, true);
+  } else {
+    document.getElementById('start-hint').innerHTML = '';
+  }
+}
+
+// A small arrowhead beside the current stroke, a quarter of the way along,
+// pointing the way the stroke should be drawn
+function drawDirectionArrow(pts, lw) {
+  const i = Math.min(pts.length - 1, Math.max(1, Math.round(pts.length * 0.3)));
+  const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+  const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+  const ux = (x1 - x0) / len, uy = (y1 - y0) / len;   // along the stroke
+  const nx = -uy, ny = ux;                             // perpendicular
+  const off = lw * 3.2, size = lw * 2.6;
+  const cx = x1 + nx * off, cy = y1 + ny * off;
+
+  guideCtx.save();
+  guideCtx.fillStyle = themeColors.guide;
+  guideCtx.beginPath();
+  guideCtx.moveTo(cx + ux * size,                 cy + uy * size);
+  guideCtx.lineTo(cx - ux * size * 0.6 + nx * size * 0.7, cy - uy * size * 0.6 + ny * size * 0.7);
+  guideCtx.lineTo(cx - ux * size * 0.6 - nx * size * 0.7, cy - uy * size * 0.6 - ny * size * 0.7);
+  guideCtx.closePath();
+  guideCtx.fill();
+  guideCtx.restore();
+}
+
+// ─── Blocks mode ──────────────────────────────────────────
+function buildPixelMap() {
   const W = guideCanvas.width, H = guideCanvas.height;
   const fontSize = Math.min(W, H) * SIZE_STEPS[sizeStepIndex];
   const fontStr  = `bold ${fontSize}px 'Arial Black','Helvetica Neue',Arial,sans-serif`;
 
   guideCtx.font         = fontStr;
   guideCtx.textBaseline = 'alphabetic';
-  const m    = guideCtx.measureText(getLetter());
-  const tx   = (W - m.width) / 2;
-  const ty   = (H - (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent)) / 2
-               + m.actualBoundingBoxAscent;
+  const m  = guideCtx.measureText(getLetter());
+  const tx = (W - m.width) / 2;
+  const ty = (H - (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent)) / 2
+             + m.actualBoundingBoxAscent;
+  blockGeom = { fontStr, fontSize, tx, ty, m };
+
+  const off = document.createElement('canvas');
+  off.width = W; off.height = H;
+  const ctx = off.getContext('2d', { willReadFrequently: true });
+  ctx.font = fontStr; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(getLetter(), tx, ty);
+
+  pixelData = ctx.getImageData(0, 0, W, H);
+  mapWidth = W; mapHeight = H;
+  letterBuckets.clear();
+
+  const step = Math.max(1, Math.round(dpr * 1.5));
+  for (let py = 0; py < H; py += step)
+    for (let px = 0; px < W; px += step)
+      if (pixelData.data[(py * W + px) * 4 + 3] > 60)
+        letterBuckets.add(toBucket(px, py));
+}
+
+function drawBlockGuide() {
+  const W = guideCanvas.width, H = guideCanvas.height;
+  const { fontStr, fontSize, tx, ty, m } = blockGeom;
 
   guideCtx.clearRect(0, 0, W, H);
 
@@ -705,31 +921,9 @@ function renderLetterBlock() {
   guideCtx.strokeText(getLetter(), tx, ty);
   guideCtx.restore();
 
-  buildPixelMap(fontStr, tx, ty, W, H);
-  placeStartHintAt(
-    (tx + m.width * 0.08) / dpr,
-    (ty - m.actualBoundingBoxAscent) / dpr
-  );
-}
-
-// ─── Block-mode pixel map ─────────────────────────────────
-function buildPixelMap(fontStr, tx, ty, W, H) {
-  const off = document.createElement('canvas');
-  off.width = W; off.height = H;
-  const ctx = off.getContext('2d', { willReadFrequently: true });
-  ctx.font = fontStr; ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(getLetter(), tx, ty);
-
-  pixelData = ctx.getImageData(0, 0, W, H);
-  mapWidth = W; mapHeight = H;
-  letterBuckets.clear();
-
-  const step = Math.max(1, Math.round(dpr * 1.5));
-  for (let py = 0; py < H; py += step)
-    for (let px = 0; px < W; px += step)
-      if (pixelData.data[(py * W + px) * 4 + 3] > 60)
-        letterBuckets.add(toBucket(px, py));
+  if (!inkLog.length) {
+    placeStartHintAt((tx + m.width * 0.08) / dpr, (ty - m.actualBoundingBoxAscent) / dpr, '', false);
+  }
 }
 
 function toBucket(px, py) {
@@ -738,34 +932,8 @@ function toBucket(px, py) {
   return by * GRID_SIZE + bx;
 }
 
-// ─── Waypoint map ─────────────────────────────────────────
-function buildWaypoints() {
-  const { ox, oy, scale } = letterTransform();
-  const pathStr = getPathStr();
-
-  // Use a hidden SVG element to sample points along the path
-  const ns  = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:visible';
-  document.body.appendChild(svg);
-  const el = document.createElementNS(ns, 'path');
-  el.setAttribute('d', pathStr);
-  svg.appendChild(el);
-
-  const totalLen = el.getTotalLength();
-  // One waypoint roughly every 6 units in path space (≈ 6% of letter size)
-  const numPts = Math.max(20, Math.ceil(totalLen / 6));
-  waypoints = [];
-  for (let i = 0; i <= numPts; i++) {
-    const pt = el.getPointAtLength(totalLen * i / numPts);
-    waypoints.push([ox + pt.x * scale, oy + pt.y * scale]);
-  }
-
-  document.body.removeChild(svg);
-  visitedWaypoints = new Set();
-}
-
 // ─── Coverage detection ───────────────────────────────────
+// Returns whether the point is on the letter (for ink colour and accuracy)
 function markCoverage(cssX, cssY) {
   return isLineMode ? markCoverageLine(cssX, cssY) : markCoverageBlock(cssX, cssY);
 }
@@ -773,13 +941,28 @@ function markCoverage(cssX, cssY) {
 function markCoverageLine(cssX, cssY) {
   const px = cssX * dpr, py = cssY * dpr;
   const r2 = (DETECT_RADIUS * dpr) ** 2;
-  let onPath = false;
-  for (let i = 0; i < waypoints.length; i++) {
-    const dx = px - waypoints[i][0], dy = py - waypoints[i][1];
-    const d2 = dx * dx + dy * dy;
-    if (d2 <= r2) { visitedWaypoints.add(i); onPath = true; }
+  const near = ([x, y]) => (px - x) ** 2 + (py - y) ** 2 <= r2;
+
+  // Advance the current stroke only along its drawing direction: a point
+  // counts if it's within reach of the last point reached, so starting at the
+  // wrong end or jumping into the middle does nothing.
+  let strokeChanged = false;
+  while (currentStroke < strokes.length) {
+    const s = strokes[currentStroke];
+    let next = -1;
+    const last = Math.min(s.pts.length - 1, s.frontier + 1 + ORDER_SLACK);
+    for (let j = s.frontier + 1; j <= last; j++) if (near(s.pts[j])) next = j;
+    if (next < 0) break;
+    s.frontier = next;
+    if (s.frontier + 1 >= Math.ceil(s.pts.length * STROKE_DONE)) {
+      s.frontier = s.pts.length - 1;
+      currentStroke++;
+      strokeChanged = true;
+    }
   }
-  return onPath;
+  if (strokeChanged && !replaying) drawGuide();   // highlight the next stroke
+
+  return strokes.some(s => s.pts.some(near));
 }
 
 function markCoverageBlock(cssX, cssY) {
@@ -808,9 +991,28 @@ function markCoverageBlock(cssX, cssY) {
   return false;
 }
 
+// Share of the letter done: strokes traced (Lines) or area coloured (Blocks)
 function getCoverage() {
-  if (isLineMode) return waypoints.length > 0 ? visitedWaypoints.size / waypoints.length : 0;
+  if (isLineMode) {
+    let done = 0, total = 0;
+    strokes.forEach((s, i) => {
+      total += s.pts.length;
+      done  += i < currentStroke ? s.pts.length : (i === currentStroke ? s.frontier + 1 : 0);
+    });
+    return total ? done / total : 0;
+  }
   return letterBuckets.size > 0 ? coveredBuckets.size / letterBuckets.size : 0;
+}
+
+function isComplete() {
+  return isLineMode ? (strokes.length > 0 && currentStroke >= strokes.length)
+                    : getCoverage() >= COVER_THRESHOLD;
+}
+
+// Share of the child's ink that landed on the letter
+function accuracy() {
+  const total = inkOn + inkOff;
+  return total ? inkOn / total : 1;
 }
 
 // ─── Drawing ──────────────────────────────────────────────
@@ -825,21 +1027,34 @@ function touchPos(e) {
   return { x: t.clientX - r.left, y: t.clientY - r.top };
 }
 
-function startDraw({ x, y }) {
+function startDraw(pos) {
+  if (retryTimer) return;   // wait for the "try again" reset
   isDrawing = true;
-  lastX = x; lastY = y;
-  paintSegment(x, y, x, y);
+  lastX = pos.x; lastY = pos.y;
+  inkLog.push([toLetterSpace(pos)]);
+  paintSegment(pos.x, pos.y, pos.x, pos.y);
 }
 
-function contDraw({ x, y }) {
-  paintSegment(lastX, lastY, x, y);
-  lastX = x; lastY = y;
+function contDraw(pos) {
+  inkLog[inkLog.length - 1].push(toLetterSpace(pos));
+  paintSegment(lastX, lastY, pos.x, pos.y);
+  lastX = pos.x; lastY = pos.y;
+}
+
+// Finger lifted: if the letter is done but most of the ink missed it, start over
+function endDraw() {
+  if (!isDrawing) return;
+  isDrawing = false;
+  if (!celebrated && !retryTimer && isComplete() && accuracy() < ACCURACY_MIN) tryAgain();
 }
 
 function paintSegment(x1, y1, x2, y2) {
   const onLetter = markCoverage(x2, y2);
-  const color    = onLetter ? themeColors.on : themeColors.off;
-  const lw       = STROKE_CSS * dpr;
+  const segLen   = Math.hypot(x2 - x1, y2 - y1) || STROKE_CSS / 2;
+  if (onLetter) inkOn += segLen; else inkOff += segLen;
+
+  const color = onLetter ? themeColors.on : themeColors.off;
+  const lw    = STROKE_CSS * dpr;
 
   drawCtx.save();
   drawCtx.strokeStyle = color;
@@ -862,35 +1077,62 @@ function paintSegment(x1, y1, x2, y2) {
   }
   drawCtx.restore();
 
-  updateProgress();
+  if (!replaying) updateProgress();
 }
 
 // Touch handlers
 function onTouchStart(e) { e.preventDefault(); startDraw(touchPos(e)); }
 function onTouchMove(e)  { e.preventDefault(); if (isDrawing) contDraw(touchPos(e)); }
-function onTouchEnd(e)   { e.preventDefault(); isDrawing = false; }
+function onTouchEnd(e)   { e.preventDefault(); endDraw(); }
 
 // ─── Progress & celebration ───────────────────────────────
 function updateProgress() {
-  const pct = Math.min(getCoverage() / COVER_THRESHOLD * 100, 100);
-  document.getElementById('progress-bar').style.width = pct + '%';
-  if (!celebrated && getCoverage() >= COVER_THRESHOLD) celebrate();
+  const frac = isLineMode ? getCoverage() : getCoverage() / COVER_THRESHOLD;
+  document.getElementById('progress-bar').style.width = Math.min(frac * 100, 100) + '%';
+  if (replaying || celebrated || retryTimer) return;
+  if (isComplete() && accuracy() >= ACCURACY_MIN) celebrate();
+}
+
+function showMessage(text, isRetry) {
+  const msg = document.getElementById('celebration-msg');
+  msg.textContent = text;
+  msg.classList.toggle('retry', isRetry);
+  // Restart the pop-in animation
+  msg.style.animation = 'none';
+  void msg.offsetWidth;
+  msg.style.animation = '';
+  document.getElementById('celebration-overlay').classList.add('active');
+}
+
+function hideMessage() {
+  document.getElementById('celebration-overlay').classList.remove('active');
 }
 
 function celebrate() {
   celebrated = true;
   totalStars++;
-
-  const shown = ((totalStars - 1) % 5) + 1;
-  document.getElementById('stars-display').textContent = '⭐'.repeat(shown);
-
+  savePrefs();
+  syncControls();
   spawnConfetti();
+  showMessage(CELEB_MESSAGES[Math.floor(Math.random() * CELEB_MESSAGES.length)], false);
+  setTimeout(hideMessage, 1800);
+}
 
-  const overlay = document.getElementById('celebration-overlay');
-  document.getElementById('celebration-msg').textContent =
-    CELEB_MESSAGES[Math.floor(Math.random() * CELEB_MESSAGES.length)];
-  overlay.classList.add('active');
-  setTimeout(() => overlay.classList.remove('active'), 1800);
+// Gentle "try again": no star, then a clean letter to retrace
+function tryAgain() {
+  showMessage(RETRY_MESSAGES[Math.floor(Math.random() * RETRY_MESSAGES.length)], true);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    hideMessage();
+    renderLetter();
+  }, 1600);
+}
+
+function cancelRetry() {
+  if (!retryTimer) return;
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  hideMessage();
 }
 
 function spawnConfetti() {
@@ -917,71 +1159,57 @@ function spawnConfetti() {
   setTimeout(() => { container.innerHTML = ''; }, 2200);
 }
 
-// ─── Start hint (pulsing dot at path start) ───────────────
-function placeStartHintAt(cssX, cssY) {
+// ─── Start hint (pulsing dot where to begin) ──────────────
+// In Lines mode the dot stays put and shows the stroke number; in Blocks
+// mode it fades after a few seconds.
+function placeStartHintAt(cssX, cssY, label, persistent) {
   const hint = document.getElementById('start-hint');
   hint.innerHTML = '';
   const wCss = guideCanvas.width  / dpr;
   const hCss = guideCanvas.height / dpr;
   const dot  = document.createElement('div');
   dot.className = 'start-pulse';
-  const ds = Math.max(16, STROKE_CSS * 1.4);
+  const ds = Math.max(label ? 22 : 16, STROKE_CSS * 1.4);
   dot.style.cssText = `
     width:${ds}px; height:${ds}px;
     left:calc(${(cssX / wCss * 100).toFixed(1)}% - ${ds/2}px);
     top:calc(${(cssY / hCss * 100).toFixed(1)}% - ${ds/2}px);
   `;
+  dot.textContent = label;
   hint.appendChild(dot);
-  setTimeout(() => { if (dot.parentNode) dot.remove(); }, 3000);
+  if (!persistent) setTimeout(() => { if (dot.parentNode) dot.remove(); }, 3000);
 }
 
 // ─── Controls ─────────────────────────────────────────────
-function resetDrawing() {
-  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-  visitedWaypoints = new Set();
-  coveredBuckets.clear();
-  celebrated = false;
-  document.getElementById('progress-bar').style.width = '0%';
-}
-
 function toggleMode() {
   isLineMode = !isLineMode;
-  const btn = document.getElementById('mode-btn');
-  btn.textContent   = isLineMode ? 'Lines' : 'Blocks';
-  btn.style.color   = isLineMode ? '#40c4ff' : 'var(--green)';
-  btn.style.borderColor = btn.style.color;
+  syncControls();
+  savePrefs();
   renderLetter();
 }
 
-function clearDrawing() {
-  resetDrawing();
-  if (waypoints.length > 0) {
-    const [wpx, wpy] = waypoints[0];
-    placeStartHintAt(wpx / dpr, wpy / dpr);
-  }
-}
+function clearDrawing() { renderLetter(); }
 
-function prevLetter() { letterIndex = (letterIndex - 1 + 26) % 26; renderLetter(); }
-function nextLetter() { letterIndex = (letterIndex + 1) % 26;      renderLetter(); }
+function prevLetter() { letterIndex = (letterIndex - 1 + 26) % 26; savePrefs(); renderLetter(); }
+function nextLetter() { letterIndex = (letterIndex + 1) % 26;      savePrefs(); renderLetter(); }
 
 function adjustSize(delta) {
   sizeStepIndex = Math.max(0, Math.min(SIZE_STEPS.length - 1, sizeStepIndex + delta));
-  document.querySelector('.size-btn:first-child').disabled = sizeStepIndex === 0;
-  document.querySelector('.size-btn:last-child').disabled  = sizeStepIndex === SIZE_STEPS.length - 1;
-  renderLetter();
+  syncControls();
+  savePrefs();
+  renderLetter(true);   // the ink scales with the letter
 }
 
 function toggleCase() {
   isUppercase = !isUppercase;
-  const btn = document.getElementById('case-btn');
-  btn.textContent      = isUppercase ? 'Aa' : 'aA';
-  btn.style.color      = isUppercase ? 'var(--orange)' : 'var(--purple)';
-  btn.style.borderColor = btn.style.color;
+  syncControls();
+  savePrefs();
   renderLetter();
 }
 
 function pickLetter(idx) {
   letterIndex = idx;
+  savePrefs();
   closeGrid();
   renderLetter();
 }
@@ -1001,6 +1229,7 @@ function buildLetterGrid() {
 function openGrid() {
   document.getElementById('grid-overlay').classList.add('open');
   document.querySelectorAll('.letter-pick-btn').forEach((btn, i) => {
+    btn.textContent = isUppercase ? ALPHABET[i] : ALPHABET[i].toLowerCase();
     btn.classList.toggle('active', i === letterIndex);
   });
 }

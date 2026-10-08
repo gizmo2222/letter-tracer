@@ -10,14 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
+      # The server's host keys are pinned in .github/known_hosts
       - name: Upload via SFTP
         env:
           SSHPASS: ${{ secrets.SFTP_PASSWORD }}
         run: |
           sudo apt-get install -y sshpass > /dev/null 2>&1
-          sshpass -e sftp -o StrictHostKeyChecking=no \
+          sshpass -e sftp -o UserKnownHostsFile=.github/known_hosts -o StrictHostKeyChecking=yes \
             ${{ secrets.SFTP_USER }}@metacrystal.com <<'SFTP'
           put index.html /home/nstrupp/metacrystal.com/letter-tracer.html
           SFTP
